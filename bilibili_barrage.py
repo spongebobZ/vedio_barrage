@@ -58,9 +58,9 @@ def split_task(cid_list):
     split_nums = sum(divmod(len(cid_list), task_limit))
     for i in range(split_nums):
         if i < split_nums - 1:
-            fetch_barrage(cid_list[i * task_limit: (i + 1) * task_limit])
+            fetch_comments(cid_list[i * task_limit: (i + 1) * task_limit])
         else:
-            fetch_barrage(cid_list[i * task_limit:])
+            fetch_comments(cid_list[i * task_limit:])
 
 
 def run(total, thread_num):
@@ -68,18 +68,19 @@ def run(total, thread_num):
     per_thread_tasks = total // thread_num
     thread_list = []
     for i in range(thread_num):
-        t = i < thread_num - 1 and threading.Thread(target=fetch_barrage, args=(
+        t = i < thread_num - 1 and threading.Thread(target=fetch_comments, args=(
             cid_list[i * per_thread_tasks:(i + 1) * per_thread_tasks])) or threading.Thread(
-            target=fetch_barrage, args=(cid_list[i * per_thread_tasks:]))
+            target=fetch_comments, args=(cid_list[i * per_thread_tasks:]))
         thread_list.append(t)
         t.start()
     for t in thread_list:
         t.join()
 
 
-def fetch_barrage(cid_list):
+def fetch_comments(cid_list):
     """
-    :param cid_list: cid list to fetch
+    :param num: the comments to fetch
+    :param output_dir: the file to save comments
     :return:
     """
     output_path = 'bilibili_barrage_dir'
@@ -88,7 +89,7 @@ def fetch_barrage(cid_list):
     for i in range(output_partitions):
         locals()[part_list_prefix + str(i)] = []
     handler = MySaxHandler()
-    barrage = []
+    comment = []
     barrage_list = []
     for i in cid_list:
         parser = ParserCreate()
@@ -96,8 +97,8 @@ def fetch_barrage(cid_list):
         parser.EndElementHandler = handler.end_element
         parser.CharacterDataHandler = handler.char_data
         try:
-            barrage_url = 'http://barrage.bilibili.com/%s.xml' % i
-            r = requests.get(barrage_url)
+            comment_url = 'http://comment.bilibili.com/%s.xml' % i
+            r = requests.get(comment_url)
         except requests.exceptions.ConnectionError:
             continue
         if r.status_code != 200:
@@ -109,8 +110,10 @@ def fetch_barrage(cid_list):
 
         barrage_list.extend(handler.get_result())
         if len(barrage_list) == output_partitions * 1000:
+            print('satified dump condition')
             for barrage in barrage_list:
                 locals()[part_list_prefix + str(int(float(barrage.split(',')[0]) % output_partitions))].append(barrage)
+            barrage_list.clear()
             for i in range(output_partitions):
                 if len(locals()[part_list_prefix + str(i)]) < 1000:
                     continue
@@ -121,9 +124,20 @@ def fetch_barrage(cid_list):
                         locals()[part_list_prefix + str(i)].clear()
                 finally:
                     write_lock.release()
+    if len(barrage_list) > 0:
+        print('dump the leave data to disk')
+        for barrage in barrage_list:
+            locals()[part_list_prefix + str(int(float(barrage.split(',')[0]) % output_partitions))].append(barrage)
+        for i in range(output_partitions):
+            write_lock.acquire()
+            try:
+                with open(output_path + '/part_' + str(i) + '.csv', 'a', encoding='utf-8') as fa:
+                    tuple(map(lambda c: fa.write(c + '\n'), locals()[part_list_prefix + str(i)]))
+            finally:
+                write_lock.release()
 
 
-def barrage_count(path):
+def comment_count(path):
     """
     :param path: barrage file path
     :return: barrage world count
@@ -181,9 +195,10 @@ def search_similar_barrage(path, keyword):
 
 
 if __name__ == '__main__':
-    run_all(10, 10000000, 19999999)
+    output_path = 'bilibili_barrage_dir'
+    run_all(14, 1, 10000)
     # run(10000, 50, output_path)
-    # barrage_count(output_dir)
-    # format_barrage_path = 'bilibili_barrage_dir/format_barrages.csv'
+    # comment_count(output_dir)
+    # format_barrage_path = 'bilibili_barrage_dir/format_comments.csv'
     # transform_barrage(output_path, format_barrage_path)
     # print(search_similar_barrage(format_barrage_path, 'ab'))
