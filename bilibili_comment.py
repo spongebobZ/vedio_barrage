@@ -1,4 +1,5 @@
 import threading
+import xml
 import requests
 import numpy
 from xml.parsers.expat import ParserCreate
@@ -6,23 +7,23 @@ from xml.parsers.expat import ParserCreate
 
 class MySaxHandler:
     def __init__(self):
-        self.p_coment_list = []
-        self.coment = ''
+        self.p_barrage_list = []
+        self.barrage = ''
 
     def start_element(self, name, attrs):
         if name == 'd':
-            self.coment = attrs['p'] + ','
+            self.barrage = attrs['p'] + ','
 
     def end_element(self, name):
         if name == 'd':
-            self.p_coment_list.append(self.coment)
-            self.coment = ''
+            self.p_barrage_list.append(self.barrage)
+            self.barrage = ''
 
     def char_data(self, text):
-        self.coment += text
+        self.barrage += text
 
     def get_result(self):
-        r = self.p_coment_list
+        r = self.p_barrage_list
         return r
 
 
@@ -30,13 +31,18 @@ write_lock = threading.Lock()
 
 
 def run_all(thread_num, start_offset, end_offset):
-    cid_list = list(range(start_offset, end_offset))
-    per_thread_tasks = len(cid_list) // thread_num
+    """
+    :param thread_num: start threads for the application
+    :param start_offset: vedio cid start offset
+    :param end_offset: vedio cid end offset
+    :return:
+    """
+    per_thread_tasks = numpy.math.ceil((end_offset - start_offset + 1) / thread_num)
     thread_list = []
     for i in range(thread_num):
         t = i < thread_num - 1 and threading.Thread(target=split_task, args=(
-            cid_list[i * per_thread_tasks:(i + 1) * per_thread_tasks],)) or threading.Thread(
-            target=split_task, args=(cid_list[i * per_thread_tasks:],))
+            list(range(i * per_thread_tasks, (i + 1) * per_thread_tasks)),)) or threading.Thread(
+            target=split_task, args=(list(range(i * per_thread_tasks, end_offset + 1)),))
         thread_list.append(t)
         t.start()
     for t in thread_list:
@@ -44,13 +50,17 @@ def run_all(thread_num, start_offset, end_offset):
 
 
 def split_task(cid_list):
+    """
+    :param cid_list: cid list
+    :return:
+    """
     task_limit = 100
     split_nums = sum(divmod(len(cid_list), task_limit))
     for i in range(split_nums):
         if i < split_nums - 1:
-            fetch_comments(cid_list[i * task_limit: (i + 1) * task_limit])
+            fetch_barrage(cid_list[i * task_limit: (i + 1) * task_limit])
         else:
-            fetch_comments(cid_list[i * task_limit:])
+            fetch_barrage(cid_list[i * task_limit:])
 
 
 def run(total, thread_num):
@@ -58,46 +68,49 @@ def run(total, thread_num):
     per_thread_tasks = total // thread_num
     thread_list = []
     for i in range(thread_num):
-        t = i < thread_num - 1 and threading.Thread(target=fetch_comments, args=(
+        t = i < thread_num - 1 and threading.Thread(target=fetch_barrage, args=(
             cid_list[i * per_thread_tasks:(i + 1) * per_thread_tasks])) or threading.Thread(
-            target=fetch_comments, args=(cid_list[i * per_thread_tasks:]))
+            target=fetch_barrage, args=(cid_list[i * per_thread_tasks:]))
         thread_list.append(t)
         t.start()
     for t in thread_list:
         t.join()
 
 
-def fetch_comments(cid_list):
+def fetch_barrage(cid_list):
     """
-    :param num: the comments to fetch
-    :param output_dir: the file to save comments
+    :param cid_list: cid list to fetch
     :return:
     """
-    output_path = 'bilibili_coment_dir'
+    output_path = 'bilibili_barrage_dir'
     output_partitions = 10
     part_list_prefix = 'part_'
     for i in range(output_partitions):
         locals()[part_list_prefix + str(i)] = []
     handler = MySaxHandler()
-    comment = []
-    coment_list = []
+    barrage = []
+    barrage_list = []
     for i in cid_list:
         parser = ParserCreate()
         parser.StartElementHandler = handler.start_element
         parser.EndElementHandler = handler.end_element
         parser.CharacterDataHandler = handler.char_data
         try:
-            comment_url = 'http://comment.bilibili.com/%s.xml' % i
-            r = requests.get(comment_url)
+            barrage_url = 'http://barrage.bilibili.com/%s.xml' % i
+            r = requests.get(barrage_url)
         except requests.exceptions.ConnectionError:
             continue
         if r.status_code != 200:
             continue
-        parser.Parse(r.content)
-        coment_list.extend(handler.get_result())
-        if len(coment_list) == output_partitions * 1000:
-            for coment in coment_list:
-                locals()[part_list_prefix + str(int(coment.split(',')[:1]) % output_partitions)].append(coment)
+        try:
+            parser.Parse(r.content)
+        except xml.parsers.expat.ExpatError:
+            print(r.content.decode(encoding='utf-8', errors='ignore'))
+
+        barrage_list.extend(handler.get_result())
+        if len(barrage_list) == output_partitions * 1000:
+            for barrage in barrage_list:
+                locals()[part_list_prefix + str(int(float(barrage.split(',')[0]) % output_partitions))].append(barrage)
             for i in range(output_partitions):
                 if len(locals()[part_list_prefix + str(i)]) < 1000:
                     continue
@@ -110,10 +123,10 @@ def fetch_comments(cid_list):
                     write_lock.release()
 
 
-def comment_count(path):
+def barrage_count(path):
     """
-    :param path: coment file path
-    :return: coment world count
+    :param path: barrage file path
+    :return: barrage world count
     """
     word_list = []
     with open(path, 'r', encoding='utf-8', errors='ignore') as fr:
@@ -130,50 +143,47 @@ def comment_count(path):
     return word_count
 
 
-def transform_coment(basepath, resultpath):
+def transform_barrage(basepath, resultpath):
     """
-    :param basepath: base coment file path
+    :param basepath: base barrage file path
     :param resultpath: transform result path
     :return:
     """
+    format_barrage_list = []
     with open(basepath, 'r', encoding='utf-8', errors='ignore') as fr:
         for line in fr:
-            pass
-        while True:
-            lines = fr.readline(1000)
-            if not lines:
-                break
-            coment_text_list = [','.join(x.split(',')[8:]) for x in lines.split('\n') if x.count(',') > 7]
-            with open(resultpath, 'a', encoding='utf-8') as fa:
-                tuple(map(lambda w: fa.write(w + '\n'), coment_text_list))
+            if len(format_barrage_list) == 1000:
+                with open(resultpath, 'a', encoding='utf-8') as fa:
+                    tuple(map(lambda w: fa.write(w + '\n'), format_barrage_list))
+                    format_barrage_list.clear()
+            split_word = line.split(',')
+            if len(split_word) < 8:
+                continue
+            format_barrage_list.append(','.join(split_word[8:]))
 
 
-def search_similar_coment(path, keyword):
+def search_similar_barrage(path, keyword):
     """
-    :param path: coment file path
-    :param keyword: key word to get similar coment
-    :return: similar coment
+    :param path: barrage file path
+    :param keyword: key word to get similar barrage
+    :return: similar barrage
     """
-    similar_coment_list = []
+    similar_barrage_list = []
     with open(path, 'r', encoding='utf-8', errors='ignore') as fr:
-        while True:
-            lines = fr.readline(1000)
-            if not lines:
-                break
-            match_words_list = tuple(filter(lambda x: keyword in x, lines.split('\n')))
-            tuple(map(lambda w: similar_coment_list.append(w), match_words_list))
-    similar_coment_dict = dict()
-    for w in similar_coment_list:
-        similar_coment_dict[w] = w in similar_coment_dict and similar_coment_dict[w] + 1 or 1
-    similar_coment_count = sorted(similar_coment_dict.items(), key=lambda d: d[1], reverse=True)
-    return similar_coment_count
+        for line in fr:
+            if keyword in line:
+                similar_barrage_list.append(line)
+    similar_barrage_dict = dict()
+    for w in similar_barrage_list:
+        similar_barrage_dict[w] = w in similar_barrage_dict and similar_barrage_dict[w] + 1 or 1
+    similar_barrage_count = sorted(similar_barrage_dict.items(), key=lambda d: d[1], reverse=True)
+    return similar_barrage_count
 
 
 if __name__ == '__main__':
-    output_path = 'bilibili_coment_dir'
-    run_all(10, 1000000, 1010000)
+    run_all(10, 10000000, 19999999)
     # run(10000, 50, output_path)
-    # comment_count(output_dir)
-    # format_coment_path = 'bilibili_coment_dir/format_comments.csv'
-    # transform_coment(output_path, format_coment_path)
-    # print(search_similar_coment(format_coment_path, '前排'))
+    # barrage_count(output_dir)
+    # format_barrage_path = 'bilibili_barrage_dir/format_barrages.csv'
+    # transform_barrage(output_path, format_barrage_path)
+    # print(search_similar_barrage(format_barrage_path, 'ab'))
